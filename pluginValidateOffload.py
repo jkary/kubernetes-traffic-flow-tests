@@ -2,6 +2,10 @@ import re
 import typing
 
 from typing import Optional
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    import testConfig
 
 from ktoolbox import common
 from ktoolbox import host
@@ -129,6 +133,7 @@ class PluginValidateOffload(pluginbase.Plugin):
         perf_server: task.ServerTask,
         perf_client: task.ClientTask,
         tenant: bool,
+        plugin_config: "testConfig.ConfPlugin",
     ) -> list[PluginTask]:
         # TODO allow this to run on each individual server + client pairs.
         return [

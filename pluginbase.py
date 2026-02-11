@@ -26,12 +26,14 @@ class Plugin(ABC):
         perf_server: "ServerTask",
         perf_client: "ClientTask",
         tenant: bool,
+        plugin_config: "ConfPlugin",
     ) -> list["PluginTask"]:
         tasks = self._enable(
             ts=ts,
             perf_server=perf_server,
             perf_client=perf_client,
             tenant=tenant,
+            plugin_config=plugin_config,
         )
         logger.debug(f"{self.log_name}: enable ({len(tasks)} tasks, {tasks})")
         return tasks
@@ -44,6 +46,7 @@ class Plugin(ABC):
         perf_server: "ServerTask",
         perf_client: "ClientTask",
         tenant: bool,
+        plugin_config: "ConfPlugin",
     ) -> list["PluginTask"]:
         pass
 
@@ -113,4 +116,5 @@ if typing.TYPE_CHECKING:
     from task import ClientTask
     from task import ServerTask
     from task import PluginTask
+    from testConfig import ConfPlugin
     from testSettings import TestSettings

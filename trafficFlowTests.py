@@ -45,6 +45,21 @@ class TrafficFlowTests:
                 "multi-networkpolicies"
             ),
         )
+        client.oc(
+            "delete networkpolicies -l tft-tests",
+            namespace=namespace,
+            check_success=client.check_success_delete_ignore_noexist("networkpolicies"),
+        )
+
+        # Clean up cluster-scoped AdminNetworkPolicies
+        logger.info("Cleaning AdminNetworkPolicies with label tft-tests")
+        client.oc(
+            "delete adminnetworkpolicies -l tft-tests",
+            namespace=None,
+            check_success=client.check_success_delete_ignore_noexist(
+                "adminnetworkpolicies"
+            ),
+        )
 
         logger.info(
             f"Cleaning external containers {task.EXTERNAL_PERF_SERVER} (if present)"
@@ -90,6 +105,7 @@ class TrafficFlowTests:
                 perf_server=servers[-1],
                 perf_client=clients[-1],
                 tenant=True,
+                plugin_config=plugin,
             )
             monitors.extend(m)
 
