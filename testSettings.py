@@ -130,6 +130,23 @@ class TestSettings:
     def connection_mode(self) -> tftbase.ConnectionMode:
         return self.test_case_id.info.connection_mode
 
+    @property
+    def expects_blocked(self) -> bool:
+        """Return True if the test expects traffic to be blocked.
+
+        Traffic is expected to be blocked when:
+        - ANP action is "Deny", OR
+        - ANP action is "Pass" AND np_action is "Deny" (delegates to NetworkPolicy)
+        """
+        if self.test_case_id != tftbase.TestCaseType.POD_TO_POD_ADMIN_NETWORK_POLICY:
+            return False
+        anp_action = self.connection.effective_anp_action
+        if anp_action == "Deny":
+            return True
+        if anp_action == "Pass" and self.connection.np_action == "Deny":
+            return True
+        return False
+
     def get_test_info(self) -> str:
         return f"""type={self.connection.test_type.name}, test-case={self.test_case_id.name}: {self.client_pod_type.name} pod to {self.connection_mode.name} to {self.server_pod_type.name} pod - {self.test_case_id.info.node_location}
         Client Node: {self.node_client.name}
@@ -166,4 +183,5 @@ class TestSettings:
                 is_tenant=self.client_is_tenant,
                 index=self.client_index,
             ),
+            expects_blocked=self.expects_blocked,
         )

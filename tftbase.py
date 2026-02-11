@@ -325,6 +325,7 @@ class TestCaseType(Enum):
     POD_TO_POD_2ND_INTERFACE_SAME_NODE = 27
     POD_TO_POD_2ND_INTERFACE_DIFF_NODE = 28
     POD_TO_POD_MULTI_NETWORK_POLICY = 29
+    POD_TO_POD_ADMIN_NETWORK_POLICY = 30
 
     @property
     def info(self) -> "TestCaseTypInfo":
@@ -338,6 +339,7 @@ class ConnectionMode(Enum):
     EXTERNAL_IP = 4
     MULTI_NETWORK = 5
     MULTI_HOME = 6
+    ADMIN_NETWORK_POLICY = 7
 
 
 @strict_dataclass
@@ -434,6 +436,7 @@ class TestMetadata:
     reverse: bool
     server: PodInfo
     client: PodInfo
+    expects_blocked: bool = False
 
 
 @strict_dataclass
@@ -502,15 +505,19 @@ class FlowTestOutput(AggregatableOutput):
 
     @property
     def eval_msg(self) -> Optional[str]:
+        # Check eval_result first - it has the final evaluation decision
+        if self.eval_result is not None:
+            if self.eval_result.success:
+                return None
+            if self.eval_result.msg is not None:
+                return self.eval_result.msg
+            return "evaluation failed"
+        # Fallback if no eval_result (shouldn't happen after evaluation)
         if not self.success:
             if self.msg is not None:
                 return self.msg
-        elif self.eval_result is not None and not self.eval_result.success:
-            if self.eval_result.msg is not None:
-                return self.eval_result.msg
-        else:
-            return None
-        return "unspecified failure"
+            return "unspecified failure"
+        return None
 
 
 @strict_dataclass
@@ -986,6 +993,13 @@ _test_case_typ_infos = {
         TestCaseTypInfo(
             test_case_type=TestCaseType.POD_TO_POD_MULTI_NETWORK_POLICY,
             connection_mode=ConnectionMode.MULTI_NETWORK,
+            is_same_node=False,
+            is_server_hostbacked=False,
+            is_client_hostbacked=False,
+        ),
+        TestCaseTypInfo(
+            test_case_type=TestCaseType.POD_TO_POD_ADMIN_NETWORK_POLICY,
+            connection_mode=ConnectionMode.ADMIN_NETWORK_POLICY,
             is_same_node=False,
             is_server_hostbacked=False,
             is_client_hostbacked=False,

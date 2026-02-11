@@ -291,6 +291,9 @@ class ConfConnection(StructParseBaseNamed):
     plugins: tuple[ConfPlugin, ...]
     secondary_network_nad: Optional[str]
     resource_name: Optional[str]
+    anp_action: Optional[str]
+    anp_priority: Optional[int]
+    np_action: Optional[str]
 
     # This parameter is not expressed in YAML. It gets passed by the parent to
     # ConfConnection.parse()
@@ -314,6 +317,9 @@ class ConfConnection(StructParseBaseNamed):
             extra, "secondary_network_nad", self.secondary_network_nad
         )
         common.dict_add_optional(extra, "resource_name", self.resource_name)
+        common.dict_add_optional(extra, "anp_action", self.anp_action)
+        common.dict_add_optional(extra, "anp_priority", self.anp_priority)
+        common.dict_add_optional(extra, "np_action", self.np_action)
         return {
             **super().serialize(),
             "type": self.test_type.name,
@@ -332,6 +338,16 @@ class ConfConnection(StructParseBaseNamed):
         if "/" not in nad:
             nad = f"{self.namespace}/{nad}"
         return nad
+
+    @property
+    def effective_anp_action(self) -> str:
+        """Return the ANP action, defaulting to 'Allow' if not specified."""
+        return self.anp_action if self.anp_action is not None else "Allow"
+
+    @property
+    def effective_anp_priority(self) -> int:
+        """Return the ANP priority, defaulting to 50 if not specified."""
+        return self.anp_priority if self.anp_priority is not None else 50
 
     @staticmethod
     def parse(
@@ -391,6 +407,41 @@ class ConfConnection(StructParseBaseNamed):
                 default=None,
             )
 
+            anp_action = common.structparse_pop_str(
+                varg.for_key("anp_action"),
+                default=None,
+            )
+            if anp_action is not None and anp_action not in ("Allow", "Deny", "Pass"):
+                raise pctx.value_error(
+                    f"anp_action must be 'Allow', 'Deny', or 'Pass', got {repr(anp_action)}",
+                    key="anp_action",
+                )
+
+            anp_priority = common.structparse_pop_int(
+                varg.for_key("anp_priority"),
+                default=None,
+            )
+            if anp_priority is not None and (anp_priority < 0 or anp_priority > 99):
+                raise pctx.value_error(
+                    f"anp_priority must be between 0 and 99 (OVN-Kubernetes limitation), got {anp_priority}",
+                    key="anp_priority",
+                )
+
+            np_action = common.structparse_pop_str(
+                varg.for_key("np_action"),
+                default=None,
+            )
+            if np_action is not None and np_action != "Deny":
+                raise pctx.value_error(
+                    f"np_action must be 'Deny' or not specified, got {repr(np_action)}",
+                    key="np_action",
+                )
+            if np_action is not None and anp_action != "Pass":
+                raise pctx.value_error(
+                    "np_action can only be used when anp_action is 'Pass'",
+                    key="np_action",
+                )
+
         if len(server) > 1:
             raise pctx.value_error(
                 "currently only one server entry is supported", key="server"
@@ -419,6 +470,9 @@ class ConfConnection(StructParseBaseNamed):
             plugins=plugins,
             secondary_network_nad=secondary_network_nad,
             resource_name=resource_name,
+            anp_action=anp_action,
+            anp_priority=anp_priority,
+            np_action=np_action,
             namespace=namespace,
         )
 
