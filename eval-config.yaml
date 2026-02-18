@@ -49,6 +49,26 @@ IPERF_TCP:
       threshold: 18
     Reverse:
       threshold: 18
+  - id: POD_TO_NODE_PORT_TO_HOST_SAME_NODE
+    Normal:
+      threshold: 18
+    Reverse:
+      threshold: 18
+  - id: POD_TO_NODE_PORT_TO_HOST_DIFF_NODE
+    Normal:
+      threshold: 18
+    Reverse:
+      threshold: 18
+  - id: HOST_TO_HOST_SAME_NODE
+    Normal:
+      threshold: 18
+    Reverse:
+      threshold: 18
+  - id: HOST_TO_HOST_DIFF_NODE
+    Normal:
+      threshold: 18
+    Reverse:
+      threshold: 18
   - id: HOST_TO_POD_SAME_NODE
     Normal:
       threshold: 18
@@ -100,6 +120,11 @@ IPERF_TCP:
     Reverse:
       threshold: 18
   - id: POD_TO_EXTERNAL
+    Normal:
+      threshold: 18
+    Reverse:
+      threshold: 10
+  - id: HOST_TO_EXTERNAL
     Normal:
       threshold: 18
     Reverse:
@@ -170,6 +195,26 @@ IPERF_UDP:
       threshold: 5
     Reverse:
       threshold: 5
+  - id: POD_TO_NODE_PORT_TO_HOST_SAME_NODE
+    Normal:
+      threshold: 5
+    Reverse:
+      threshold: 5
+  - id: POD_TO_NODE_PORT_TO_HOST_DIFF_NODE
+    Normal:
+      threshold: 5
+    Reverse:
+      threshold: 5
+  - id: HOST_TO_HOST_SAME_NODE
+    Normal:
+      threshold: 5
+    Reverse:
+      threshold: 5
+  - id: HOST_TO_HOST_DIFF_NODE
+    Normal:
+      threshold: 5
+    Reverse:
+      threshold: 5
   - id: HOST_TO_POD_SAME_NODE
     Normal:
       threshold: 5
@@ -221,6 +266,11 @@ IPERF_UDP:
     Reverse:
       threshold: 5
   - id: POD_TO_EXTERNAL
+    Normal:
+      threshold: 5
+    Reverse:
+      threshold: 5
+  - id: HOST_TO_EXTERNAL
     Normal:
       threshold: 5
     Reverse:

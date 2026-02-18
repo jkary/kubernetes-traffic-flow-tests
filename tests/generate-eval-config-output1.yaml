@@ -48,6 +48,20 @@ IPERF_TCP:
     Reverse:
       threshold_rx: 14.2616
       threshold_tx: 14.2296
+  - id: POD_TO_NODE_PORT_TO_HOST_SAME_NODE
+    Normal:
+      threshold_rx: 37.85750000000001
+      threshold_tx: 38.061
+    Reverse:
+      threshold_rx: 42.116
+      threshold_tx: 41.892
+  - id: POD_TO_NODE_PORT_TO_HOST_DIFF_NODE
+    Normal:
+      threshold_rx: 14.416
+      threshold_tx: 14.4512
+    Reverse:
+      threshold_rx: 14.149600000000001
+      threshold_tx: 14.1188
   - id: HOST_TO_CLUSTER_IP_TO_POD_DIFF_NODE
     Normal:
       threshold_rx: 11.697000000000001
@@ -96,3 +110,10 @@ IPERF_TCP:
     Reverse:
       threshold_rx: 13.15476
       threshold_tx: 13.128640000000003
+  - id: HOST_TO_EXTERNAL
+    Normal:
+      threshold_rx: 13.14088
+      threshold_tx: 13.169799999999999
+    Reverse:
+      threshold_rx: 13.17192
+      threshold_tx: 13.14536
