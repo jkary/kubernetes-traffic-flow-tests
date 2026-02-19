@@ -91,6 +91,38 @@ class TestSettings:
             object.__setattr__(self, "_clmo_barrier", b)
 
     @property
+    def external_ip(self) -> str:
+        """Get the external IP for POD_TO_EXTERNAL tests.
+
+        Returns the configured override if set, otherwise falls back to
+        discovering the host IP from the default route.
+        """
+        import json
+
+        from ktoolbox import host
+
+        with self._lock:
+            ip = getattr(self, "_external_ip", None)
+            if ip is not None:
+                return typing.cast(str, ip)
+
+        # Fall back to discovering host IP from default route
+        r = host.local.run("ip -j route get 1")
+        if r.success and r.out.strip():
+            try:
+                routes = json.loads(r.out.strip())
+                if routes and "prefsrc" in routes[0]:
+                    return typing.cast(str, routes[0]["prefsrc"])
+            except (json.JSONDecodeError, KeyError, IndexError):
+                pass
+        raise RuntimeError("Failed to get host IP address from default route")
+
+    def set_external_ip(self, ip: str) -> None:
+        """Set the external IP override for POD_TO_EXTERNAL tests."""
+        with self._lock:
+            object.__setattr__(self, "_external_ip", ip)
+
+    @property
     def connection(self) -> testConfig.ConfConnection:
         return self.cfg_descr.get_connection()
 

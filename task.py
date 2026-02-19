@@ -916,7 +916,7 @@ class ServerTask(Task, ABC):
         while time.monotonic() - start_time < max_wait_time:
             time.sleep(0.5)
 
-            # For EXTERNAL_IP, first discover the port if not yet known
+            # For external (podman), first discover the port if not yet known
             if is_external and self.external_port == 0:
                 self.external_port = self._discover_podman_port()
                 if self.external_port > 0:
@@ -967,8 +967,9 @@ class ServerTask(Task, ABC):
         # the connection_mode we call setup_pod().
 
         th_cmd = self._create_setup_operation_get_thread_action_cmd()
+        is_external = self.connection_mode == ConnectionMode.EXTERNAL_IP
 
-        if self.connection_mode == ConnectionMode.EXTERNAL_IP:
+        if is_external:
             pull_policy = ""
             if tftbase.get_tft_image_pull_policy() == "Always":
                 pull_policy = " --pull=always"
@@ -996,7 +997,7 @@ class ServerTask(Task, ABC):
             # Or, it's the _cancel_action(), in which case we also ignore failures.
             may_fail = True
 
-            if self.connection_mode == ConnectionMode.EXTERNAL_IP:
+            if is_external:
                 res = self.lh.run(
                     cmd,
                     log_level_fail=logging.DEBUG if may_fail else logging.ERROR,
@@ -1081,10 +1082,10 @@ class ClientTask(Task, ABC):
             )
             return self.server.nodeport_ip_addr
         elif self.connection_mode == ConnectionMode.EXTERNAL_IP:
-            # For port forwarding, connect to the host's IP, not the container's internal IP
-            host_ip = self.get_host_ip()
-            logger.debug(f"get_target_ip() External connection to host {host_ip}")
-            return host_ip
+            # Use ts.external_ip which falls back to get_host_ip() if not configured
+            external_ip = self.ts.external_ip
+            logger.debug(f"get_target_ip() External connection to {external_ip}")
+            return external_ip
         elif self.connection_mode in (
             ConnectionMode.MULTI_NETWORK,
             ConnectionMode.MULTI_HOME,
@@ -1099,7 +1100,7 @@ class ClientTask(Task, ABC):
         """Get the port to connect to. For EXTERNAL_IP, use discovered external_port."""
         if self.connection_mode == ConnectionMode.EXTERNAL_IP:
             return self.server.external_port
-        return self.port
+        return self.server.port
 
     def get_host_ip(self) -> str:
         """Get the host's IP address for EXTERNAL_IP mode."""
@@ -1115,6 +1116,20 @@ class ClientTask(Task, ABC):
             except (json.JSONDecodeError, KeyError, IndexError):
                 pass
         raise RuntimeError("Failed to get host IP address from default route")
+
+    def get_server_node_ip(self) -> str:
+        """Get the server node's internal IP from Kubernetes for EGRESS_IP mode."""
+        node_name = self.server.node_name
+        result = self.run_oc(
+            f"get node {node_name} -o jsonpath='{{.status.addresses[?(@.type==\"InternalIP\")].address}}'",
+            namespace=None,
+            may_fail=True,
+        )
+        if result.success and result.out.strip().strip("'\""):
+            ip = result.out.strip().strip("'\"")
+            logger.debug(f"get_server_node_ip() found: {ip}")
+            return ip
+        raise RuntimeError(f"Failed to get InternalIP for node {node_name}")
 
     def get_podman_ip(self, pod_name: str) -> str:
         cmd = "podman inspect --format '{{.NetworkSettings.IPAddress}}' " + pod_name

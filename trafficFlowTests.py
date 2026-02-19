@@ -46,6 +46,33 @@ class TrafficFlowTests:
             ),
         )
 
+        # Clean up EgressIP resources (cluster-scoped)
+        logger.info("Cleaning EgressIP resources with label tft-tests")
+        client.oc(
+            "delete egressip -l tft-tests",
+            namespace=None,
+            check_success=client.check_success_delete_ignore_noexist("egressip"),
+        )
+
+        # Remove egress-assignable label from nodes
+        logger.info("Removing egress-assignable labels from nodes")
+        client.oc(
+            "label nodes -l k8s.ovn.org/egress-assignable k8s.ovn.org/egress-assignable-",
+            namespace=None,
+            may_fail=True,
+        )
+
+        # In DPU mode, also clean up on the infra cluster
+        if cfg_descr.tc.mode == tftbase.ClusterMode.DPU:
+            client_infra = cfg_descr.tc.client_infra
+            logger.info("Cleaning DPU cluster pods with label tft-tests")
+            client_infra.oc("delete pods -l tft-tests", namespace=namespace)
+            client_infra.oc(
+                "label nodes -l k8s.ovn.org/egress-assignable k8s.ovn.org/egress-assignable-",
+                namespace=None,
+                may_fail=True,
+            )
+
         logger.info(
             f"Cleaning external containers {task.EXTERNAL_PERF_SERVER} (if present)"
         )
@@ -90,6 +117,7 @@ class TrafficFlowTests:
                 perf_server=servers[-1],
                 perf_client=clients[-1],
                 tenant=True,
+                plugin_config=plugin,
             )
             monitors.extend(m)
 

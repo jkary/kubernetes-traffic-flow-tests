@@ -1,0 +1,20 @@
+tft:
+  - name: "EgressIP Test"
+    namespace: "default"
+    test_cases: POD_TO_EXTERNAL_EGRESSIP
+    duration: 30
+    connections:
+      - name: "egressip-iperf"
+        type: "iperf-tcp"
+        server:
+          - name: "hcp-master-1"
+            persistent: "false"
+            sriov: "false"
+        client:
+          - name: "hcp-master-2"
+            sriov: "false"
+        plugins:
+          - name: egressip
+            egress_ip: "172.16.252.200"
+
+kubeconfig: /home/jkary/labs/hcp/deploy/auth/kubeconfig

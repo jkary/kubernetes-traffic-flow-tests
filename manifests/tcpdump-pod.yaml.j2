@@ -1,0 +1,21 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  namespace: {{ name_space }}
+  name: {{ pod_name }}
+  labels:
+    tft-tests: {{ label_tft_tests }}
+spec:
+  nodeSelector:
+    kubernetes.io/hostname: {{ node_name }}
+  hostNetwork: true
+  containers:
+  - name: tft
+    image: {{ test_image }}
+    command: {{ command }}
+    args: {{ args }}
+    imagePullPolicy: {{ image_pull_policy }}
+    securityContext:
+      privileged: true
+      capabilities:
+        add: ["NET_ADMIN", "NET_RAW"]
