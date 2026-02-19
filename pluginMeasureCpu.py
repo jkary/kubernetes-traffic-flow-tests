@@ -3,8 +3,12 @@ import typing
 
 from typing import Any
 from typing import Optional
+from typing import TYPE_CHECKING
 
 from ktoolbox import common
+
+if TYPE_CHECKING:
+    import testConfig
 
 import task
 import pluginbase
@@ -30,6 +34,7 @@ class PluginMeasureCpu(pluginbase.Plugin):
         perf_server: task.ServerTask,
         perf_client: task.ClientTask,
         tenant: bool,
+        plugin_config: "testConfig.ConfPlugin",
     ) -> list[PluginTask]:
         return [
             TaskMeasureCPU(ts, TaskRole.SERVER, tenant),

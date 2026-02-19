@@ -3,8 +3,12 @@ import time
 
 from typing import Any
 from typing import Optional
+from typing import TYPE_CHECKING
 
 from ktoolbox import common
+
+if TYPE_CHECKING:
+    import testConfig
 
 import pluginbase
 import task
@@ -30,6 +34,7 @@ class PluginMeasurePower(pluginbase.Plugin):
         perf_server: task.ServerTask,
         perf_client: task.ClientTask,
         tenant: bool,
+        plugin_config: "testConfig.ConfPlugin",
     ) -> list[PluginTask]:
         return [
             TaskMeasurePower(ts, TaskRole.SERVER, tenant),
