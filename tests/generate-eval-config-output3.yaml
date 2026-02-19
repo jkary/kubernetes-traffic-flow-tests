@@ -70,14 +70,17 @@ IPERF_TCP:
       threshold: 18
   - id: HOST_TO_HOST_SAME_NODE
     Normal:
-      threshold: 18
+      threshold_rx: 18
+      threshold_tx: 21.330499999999997
     Reverse:
-      threshold: 18
+      threshold_rx: 20.971
+      threshold_tx: 20.8905
   - id: HOST_TO_HOST_DIFF_NODE
     Normal:
       threshold: 18
     Reverse:
-      threshold: 18
+      threshold_rx: 18.6245
+      threshold_tx: 18.551
   - id: HOST_TO_POD_SAME_NODE
     Normal:
       threshold: 18
