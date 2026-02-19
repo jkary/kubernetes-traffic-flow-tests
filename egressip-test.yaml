@@ -1,5 +1,5 @@
 tft:
-  - name: "EgressIP Test"
+  - name: "EgressIP Test - Cross Node"
     namespace: "default"
     test_cases: POD_TO_EXTERNAL_EGRESSIP
     duration: 30
@@ -16,5 +16,7 @@ tft:
         plugins:
           - name: egressip
             egress_ip: "172.16.252.200"
+            # Cross-node egress: egress node differs from client node
+            egress_node: "hcp-master-1"
 
 kubeconfig: /home/jkary/labs/hcp/deploy/auth/kubeconfig

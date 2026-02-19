@@ -288,7 +288,24 @@ class TaskEgressIPSetup(PluginTask):
             raise ValueError(f"EgressIP validation failed: {e}")
 
     def _validate_egress_ip_not_in_use(self) -> None:
-        """Validate that the egress IP is not responding to ping."""
+        """Validate that the egress IP is not responding to ping.
+
+        Skip validation if the EgressIP CRD already exists (e.g., from a
+        previous test run that hasn't been cleaned up yet).
+        """
+        # Check if EgressIP CRD already exists with this IP
+        egressip_name = f"egressip-{tftbase.str_sanitize(self._egress_node)}"
+        result = self.tc.client_tenant.oc(
+            f"get egressip {egressip_name}",
+            namespace=None,
+            may_fail=True,
+        )
+        if result.success:
+            logger.info(
+                f"EgressIP CRD {egressip_name} already exists, skipping ping check"
+            )
+            return
+
         logger.info(f"Checking that egress IP {self._egress_ip} is not in use...")
 
         # Ping with short timeout (1 second, 2 attempts)
@@ -459,7 +476,8 @@ class TaskEgressIPVerify(PluginTask):
 
     def get_template_args(self) -> dict[str, str | list[str] | bool]:
         args = super().get_template_args()
-        # Override for tcpdump pod
+        # Override for tcpdump pod - must run on egress node, not client node
+        args["node_name"] = f'"{self._egress_node}"'
         args["command"] = json.dumps(["/usr/bin/container-entry-point.sh"])
         args["args"] = json.dumps(["sleep", "infinity"])
         return args
