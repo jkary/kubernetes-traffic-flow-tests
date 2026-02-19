@@ -1,0 +1,19 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  namespace: {{ name_space }}
+  name: {{ pod_name }}
+  labels:
+    tft-negative-test: "true"
+spec:
+  nodeSelector:
+    kubernetes.io/hostname: {{ node_name }}
+  containers:
+  - name: tft
+    image: {{ test_image }}
+    command: {{ command }}
+    args: {{ args }}
+    imagePullPolicy: {{ image_pull_policy }}
+    securityContext:
+      privileged: {{ privileged_pod }}
+      capabilities: {{ capabilities_pod }}

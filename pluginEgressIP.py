@@ -73,12 +73,78 @@ class PluginEgressIP(pluginbase.Plugin):
         # Extract optional egress_interface parameter (default: auto-detect)
         egress_interface = plugin_config.params.get("egress_interface", "auto")
 
-        return [
-            TaskEgressIPSetup(ts, perf_server, perf_client, tenant, egress_ip),
+        # Extract optional egress_node parameter (default: client node)
+        # This enables cross-node egress testing where the egress node differs
+        # from the node where the client pod runs
+        egress_node = plugin_config.params.get("egress_node")
+        if egress_node:
+            logger.info(f"Using explicit egress_node: {egress_node}")
+        else:
+            egress_node = ts.node_client.name
+            logger.info(f"Using client node as egress_node: {egress_node}")
+
+        # Extract optional negative_test parameter (default: false)
+        # When true, adds a test to verify non-matching pods use regular node IP
+        negative_test = plugin_config.params.get("negative_test", False)
+        if isinstance(negative_test, str):
+            negative_test = negative_test.lower() in ("true", "yes", "1")
+
+        # Extract optional verify_dpu_offload parameter (default: false)
+        # When true, verifies SNAT happens on DPU, not host
+        verify_dpu_offload = plugin_config.params.get("verify_dpu_offload", False)
+        if isinstance(verify_dpu_offload, str):
+            verify_dpu_offload = verify_dpu_offload.lower() in ("true", "yes", "1")
+
+        if verify_dpu_offload and ts.cfg_descr.tc.mode != ClusterMode.DPU:
+            raise ValueError(
+                f"Plugin '{self.PLUGIN_NAME}': verify_dpu_offload requires DPU mode. "
+                f"Set kubeconfig_infra in the configuration."
+            )
+
+        tasks: list[PluginTask] = [
+            TaskEgressIPSetup(
+                ts, perf_server, perf_client, tenant, egress_ip, egress_node
+            ),
             TaskEgressIPVerify(
-                ts, perf_server, perf_client, tenant, egress_ip, egress_interface
+                ts,
+                perf_server,
+                perf_client,
+                tenant,
+                egress_ip,
+                egress_interface,
+                egress_node,
             ),
         ]
+
+        if negative_test:
+            logger.info("Adding negative test to verify non-matching pods use node IP")
+            tasks.append(
+                TaskEgressIPVerifyNegative(
+                    ts,
+                    perf_server,
+                    perf_client,
+                    tenant,
+                    egress_ip,
+                    egress_interface,
+                    egress_node,
+                )
+            )
+
+        if verify_dpu_offload:
+            logger.info("Adding DPU offload verification task")
+            tasks.append(
+                TaskEgressIPVerifyDPUOffload(
+                    ts,
+                    perf_server,
+                    perf_client,
+                    tenant,
+                    egress_ip,
+                    egress_interface,
+                    egress_node,
+                )
+            )
+
+        return tasks
 
 
 plugin = pluginbase.register_plugin(PluginEgressIP())
@@ -102,6 +168,7 @@ class TaskEgressIPSetup(PluginTask):
         perf_client: task.ClientTask,
         tenant: bool,
         egress_ip: str,
+        egress_node: str,
     ):
         super().__init__(
             ts=ts,
@@ -113,9 +180,9 @@ class TaskEgressIPSetup(PluginTask):
         self._perf_server = perf_server
         self._perf_client = perf_client
 
-        # Get egress configuration from the connection config
-        # For now, use the client node as the egress node (where the pod runs)
-        self._egress_node = ts.node_client.name
+        # Get egress configuration - egress_node can differ from client node
+        # for cross-node egress testing
+        self._egress_node = egress_node
         self._egress_ip = egress_ip
         self._egress_ips: tuple[str, ...] = (egress_ip,)
 
@@ -198,9 +265,7 @@ class TaskEgressIPSetup(PluginTask):
         except ValueError:
             pass
 
-        raise RuntimeError(
-            f"Could not determine network CIDR for node {egress_node}"
-        )
+        raise RuntimeError(f"Could not determine network CIDR for node {egress_node}")
 
     def _validate_egress_ip_in_subnet(self) -> None:
         """Validate that the egress IP is in the node's subnet."""
@@ -258,9 +323,7 @@ class TaskEgressIPSetup(PluginTask):
         }
 
         # Render the EgressIP CRD YAML
-        egressip_yaml_path = tftbase.get_manifest_renderpath(
-            f"{egressip_name}.yaml"
-        )
+        egressip_yaml_path = tftbase.get_manifest_renderpath(f"{egressip_name}.yaml")
         egressip_template = tftbase.get_manifest("egressip.yaml.j2")
         kjinja2.render_file(
             egressip_template,
@@ -360,7 +423,8 @@ class TaskEgressIPVerify(PluginTask):
         perf_client: task.ClientTask,
         tenant: bool,
         egress_ip: str,
-        egress_interface: str = "br-ex",
+        egress_interface: str,
+        egress_node: str,
     ):
         super().__init__(
             ts=ts,
@@ -372,8 +436,9 @@ class TaskEgressIPVerify(PluginTask):
         self._perf_server = perf_server
         self._perf_client = perf_client
 
-        # Get egress configuration
-        self._egress_node = ts.node_client.name
+        # Get egress configuration - egress_node can differ from client node
+        # for cross-node egress testing
+        self._egress_node = egress_node
         self._egress_ip = egress_ip
         self._egress_ips: tuple[str, ...] = (egress_ip,)
         self._egress_interface = egress_interface
@@ -554,7 +619,7 @@ class TaskEgressIPVerify(PluginTask):
                         or re.match(r"^pf\d+hpf$", name)  # DPU: pf0hpf
                     ):
                         logger.debug(f"Found physical interface on OVS: {name}")
-                        return name
+                        return typing.cast(str, name)
             except (json.JSONDecodeError, KeyError):
                 pass
 
@@ -701,3 +766,520 @@ class TaskEgressIPVerify(PluginTask):
     ) -> None:
         assert isinstance(result, PluginOutput)
         logger.info(f"EgressIP verification results: {result.result}")
+
+
+class TaskEgressIPVerifyNegative(PluginTask):
+    """Task to verify pods without matching labels use regular node IP, not EgressIP.
+
+    This negative test ensures that the EgressIP podSelector is working correctly
+    by verifying that pods NOT matching the selector still use the node's regular IP.
+    """
+
+    @property
+    def plugin(self) -> pluginbase.Plugin:
+        return plugin
+
+    @property
+    def _is_dpu_mode(self) -> bool:
+        return self.tc.mode == ClusterMode.DPU
+
+    def __init__(
+        self,
+        ts: TestSettings,
+        perf_server: task.ServerTask,
+        perf_client: task.ClientTask,
+        tenant: bool,
+        egress_ip: str,
+        egress_interface: str,
+        egress_node: str,
+    ):
+        super().__init__(
+            ts=ts,
+            index=1,  # Different index to avoid name conflicts
+            task_role=TaskRole.CLIENT,
+            tenant=tenant,
+        )
+
+        self._perf_server = perf_server
+        self._perf_client = perf_client
+        self._egress_node = egress_node
+        self._egress_ip = egress_ip
+        self._egress_interface = egress_interface
+
+        # Pod for negative test (no tft-tests label)
+        self._negative_pod_name = (
+            f"egressip-negative-{tftbase.str_sanitize(egress_node)}"
+        )
+        self.pod_name = self._negative_pod_name
+        self.in_file_template = tftbase.get_manifest("pod-no-label.yaml.j2")
+
+        # tcpdump pod runs on the egress node
+        self._tcpdump_pod_name: Optional[str] = None
+        self._tcpdump_node_name: Optional[str] = None
+
+        logger.info(
+            f"TaskEgressIPVerifyNegative: egress_node={self._egress_node}, "
+            f"egress_ip={self._egress_ip}, negative_pod={self._negative_pod_name}"
+        )
+
+    def _get_node_ip(self, node_name: str) -> str:
+        """Get the InternalIP of a node."""
+        result = self.tc.client_tenant.oc(
+            f"get node {node_name} -o jsonpath='{{.status.addresses[?(@.type==\"InternalIP\")].address}}'",
+            may_fail=True,
+        )
+
+        if not result.success or not result.out.strip().strip("'\""):
+            raise RuntimeError(f"Failed to get InternalIP for node {node_name}")
+
+        return result.out.strip().strip("'\"")
+
+    def get_template_args(self) -> dict[str, str | list[str] | bool]:
+        args = super().get_template_args()
+        # Override for negative test pod - simple curl container
+        args["command"] = json.dumps(["/usr/bin/container-entry-point.sh"])
+        args["args"] = json.dumps(["sleep", "infinity"])
+        return args
+
+    def initialize(self) -> None:
+        super().initialize()
+        self.render_pod_file("Negative Test Pod Yaml")
+
+        # Set up tcpdump pod on the egress node
+        if self._is_dpu_mode:
+            self._tcpdump_node_name = self._get_dpu_node_name(self._egress_node)
+            self._tcpdump_pod_name = (
+                f"tcpdump-neg-{tftbase.str_sanitize(self._tcpdump_node_name)}"
+            )
+            self._initialize_dpu_tcpdump_pod()
+        else:
+            self._tcpdump_node_name = self._egress_node
+            # Reuse the main tcpdump pod if on same node
+            self._tcpdump_pod_name = (
+                f"egressip-verify-{tftbase.str_sanitize(self._egress_node)}"
+            )
+
+    def _get_dpu_node_name(self, host_node: str) -> str:
+        """Get the DPU node name corresponding to a host node."""
+        host_label = self.tc.dpu_node_host_label
+        if not host_label:
+            raise ValueError(
+                "dpu_node_host_label must be configured when running in DPU mode"
+            )
+
+        selector = f"{host_label}={host_node}"
+        result = self.tc.client_infra.oc(
+            f"get nodes -l {selector} -o jsonpath='{{.items[*].metadata.name}}'",
+            may_fail=True,
+        )
+
+        if not result.success or not result.out.strip().strip("'\""):
+            raise RuntimeError(f"No DPU node found with label {selector}")
+
+        dpu_nodes = result.out.strip().strip("'\"").split()
+        return dpu_nodes[0]
+
+    def _initialize_dpu_tcpdump_pod(self) -> None:
+        """Create tcpdump pod on the DPU cluster for negative test."""
+        assert self._tcpdump_pod_name is not None
+        assert self._tcpdump_node_name is not None
+
+        logger.info(
+            f"Creating DPU tcpdump pod {self._tcpdump_pod_name} "
+            f"on node {self._tcpdump_node_name} for negative test"
+        )
+
+        namespace = self.get_namespace()
+        template_args = {
+            "name_space": f'"{namespace}"',
+            "test_image": f'"{tftbase.get_tft_test_image()}"',
+            "image_pull_policy": f'"{tftbase.get_tft_image_pull_policy()}"',
+            "command": '["/usr/bin/container-entry-point.sh"]',
+            "args": '["sleep", "infinity"]',
+            "label_tft_tests": f'"{self.index}"',
+            "node_name": f'"{self._tcpdump_node_name}"',
+            "pod_name": f'"{self._tcpdump_pod_name}"',
+        }
+
+        tcpdump_template = tftbase.get_manifest("tcpdump-pod.yaml.j2")
+        dpu_pod_yaml_path = tftbase.get_manifest_renderpath(
+            self._tcpdump_pod_name + ".yaml"
+        )
+        kjinja2.render_file(
+            tcpdump_template,
+            template_args,
+            out_file=dpu_pod_yaml_path,
+        )
+
+        result = self.tc.client_infra.oc(
+            f"apply -f {dpu_pod_yaml_path}",
+            namespace=namespace,
+            may_fail=True,
+        )
+        if not result.success:
+            raise RuntimeError(f"Failed to create DPU tcpdump pod: {result.err}")
+
+        result = self.tc.client_infra.oc(
+            f"wait --for=condition=Ready pod/{self._tcpdump_pod_name} --timeout=60s",
+            namespace=namespace,
+            may_fail=True,
+        )
+        if not result.success:
+            raise RuntimeError(f"DPU tcpdump pod failed to become ready: {result.err}")
+
+        logger.info(f"DPU tcpdump pod {self._tcpdump_pod_name} is ready")
+
+    def _run_tcpdump_cmd(
+        self,
+        cmd: str,
+        *,
+        may_fail: bool = False,
+    ) -> host.Result:
+        """Run a command on the tcpdump pod."""
+        if self._is_dpu_mode:
+            assert self._tcpdump_pod_name is not None
+            return self.tc.client_infra.oc_exec(
+                cmd,
+                pod_name=self._tcpdump_pod_name,
+                may_fail=may_fail,
+                namespace=self.get_namespace(),
+            )
+        else:
+            # In single-cluster mode, use the main verification pod
+            assert self._tcpdump_pod_name is not None
+            return self.tc.client_tenant.oc_exec(
+                cmd,
+                pod_name=self._tcpdump_pod_name,
+                may_fail=may_fail,
+                namespace=self.get_namespace(),
+            )
+
+    def _get_default_interface(self) -> Optional[str]:
+        """Get the physical network interface for egress traffic."""
+        r = self._run_tcpdump_cmd(
+            "ovs-vsctl list-ports br-ex 2>/dev/null | grep -v ^patch | head -1",
+            may_fail=True,
+        )
+        if r.success and r.out.strip():
+            return r.out.strip().split()[0]
+
+        r = self._run_tcpdump_cmd("ip -j route get 1", may_fail=True)
+        if r.success and r.out.strip():
+            try:
+                routes = json.loads(r.out.strip())
+                if routes and "dev" in routes[0]:
+                    return typing.cast(str, routes[0]["dev"])
+            except (json.JSONDecodeError, KeyError, IndexError):
+                pass
+
+        return None
+
+    def _parse_tcpdump_output(self, output: str) -> set[str]:
+        """Parse tcpdump output to extract source IPs."""
+        source_ips: set[str] = set()
+        pattern = r"IP\s+(\d+\.\d+\.\d+\.\d+)\.\d+\s+>"
+
+        for line in output.splitlines():
+            match = re.search(pattern, line)
+            if match:
+                source_ips.add(match.group(1))
+
+        return source_ips
+
+    def _create_task_operation(self) -> TaskOperation:
+        def _thread_action() -> BaseOutput:
+            success_result = True
+            msg: Optional[str] = None
+            parsed_data: dict[str, typing.Any] = {}
+
+            self.ts.clmo_barrier.wait()
+
+            # Get expected node IP (traffic from non-matching pod should use this)
+            expected_node_ip = self._get_node_ip(self._egress_node)
+            parsed_data["expected_node_ip"] = expected_node_ip
+            parsed_data["egress_ip_should_not_appear"] = self._egress_ip
+
+            # Get target info
+            target_ip = self._perf_client.get_target_ip()
+            target_port = self._perf_client.get_target_port()
+
+            logger.info(
+                f"Negative test: verifying traffic from pod without label "
+                f"uses node IP {expected_node_ip}, not EgressIP {self._egress_ip}"
+            )
+
+            # Determine interface
+            if self._egress_interface == "auto":
+                ifname = self._get_default_interface()
+                if not ifname:
+                    ifname = "br-ex"
+            else:
+                ifname = self._egress_interface
+
+            parsed_data["interface"] = ifname
+
+            # Run curl from negative test pod to generate traffic
+            # Use a short request to an external target
+            curl_cmd = f"curl -s -o /dev/null -w '%{{http_code}}' --connect-timeout 5 http://{target_ip}:{target_port}/ || true"
+            self.run_oc_exec(curl_cmd, may_fail=True)
+
+            # Capture traffic with tcpdump
+            # Filter for traffic from this pod's IP range
+            tcpdump_filter = f"tcp and dst host {target_ip} and dst port {target_port}"
+            tcpdump_cmd = (
+                f"timeout 10 tcpdump -i {ifname} -n -c 5 '{tcpdump_filter}' 2>&1"
+            )
+
+            logger.info(f"Running negative test tcpdump: {tcpdump_cmd}")
+            r = self._run_tcpdump_cmd(tcpdump_cmd, may_fail=True)
+
+            parsed_data["tcpdump_output"] = r.out
+            parsed_data["tcpdump_success"] = r.success
+
+            self.ts.event_client_finished.wait()
+
+            source_ips = self._parse_tcpdump_output(r.out)
+            parsed_data["source_ips"] = list(source_ips)
+
+            logger.info(f"Negative test captured source IPs: {source_ips}")
+
+            # Verify that EgressIP is NOT used
+            if self._egress_ip in source_ips:
+                success_result = False
+                msg = (
+                    f"Negative test FAILED: pod without tft-tests label is using "
+                    f"EgressIP {self._egress_ip}! EgressIP podSelector may not be working."
+                )
+                logger.error(msg)
+            elif expected_node_ip in source_ips:
+                msg = (
+                    f"Negative test PASSED: pod without tft-tests label is using "
+                    f"node IP {expected_node_ip} (not EgressIP)"
+                )
+                logger.info(msg)
+            elif not source_ips:
+                # No packets captured - inconclusive but not a failure
+                msg = "Negative test inconclusive: no traffic captured"
+                logger.warning(msg)
+            else:
+                msg = (
+                    f"Negative test PASSED: pod is not using EgressIP. "
+                    f"Captured IPs: {source_ips}"
+                )
+                logger.info(msg)
+
+            return PluginOutput(
+                success=success_result,
+                msg=msg,
+                plugin_metadata=self.get_plugin_metadata(),
+                command=tcpdump_cmd,
+                result=parsed_data,
+            )
+
+        return TaskOperation(
+            log_name=self.log_name,
+            thread_action=_thread_action,
+        )
+
+    def _aggregate_output_log_success(
+        self,
+        result: tftbase.AggregatableOutput,
+    ) -> None:
+        assert isinstance(result, PluginOutput)
+        logger.info(f"EgressIP negative test results: {result.result}")
+
+
+class TaskEgressIPVerifyDPUOffload(PluginTask):
+    """Task to verify SNAT happens on DPU, not on the host.
+
+    In DPU mode, the EgressIP SNAT should be performed by OVN on the DPU,
+    not on the host. This task runs tcpdump on the HOST to verify that
+    traffic leaving the host does NOT have the EgressIP as source (meaning
+    the SNAT happens later, on the DPU).
+    """
+
+    @property
+    def plugin(self) -> pluginbase.Plugin:
+        return plugin
+
+    @property
+    def _is_dpu_mode(self) -> bool:
+        return self.tc.mode == ClusterMode.DPU
+
+    def __init__(
+        self,
+        ts: TestSettings,
+        perf_server: task.ServerTask,
+        perf_client: task.ClientTask,
+        tenant: bool,
+        egress_ip: str,
+        egress_interface: str,
+        egress_node: str,
+    ):
+        super().__init__(
+            ts=ts,
+            index=2,  # Different index to avoid name conflicts
+            task_role=TaskRole.CLIENT,
+            tenant=tenant,
+        )
+
+        self._perf_server = perf_server
+        self._perf_client = perf_client
+        self._egress_node = egress_node
+        self._egress_ip = egress_ip
+        self._egress_interface = egress_interface
+
+        # Host tcpdump pod - runs on the HOST (tenant cluster), not DPU
+        self._host_tcpdump_pod_name = (
+            f"egressip-host-tcpdump-{tftbase.str_sanitize(egress_node)}"
+        )
+        self.pod_name = self._host_tcpdump_pod_name
+        self.in_file_template = tftbase.get_manifest("tcpdump-pod.yaml.j2")
+
+        logger.info(
+            f"TaskEgressIPVerifyDPUOffload: egress_node={self._egress_node}, "
+            f"egress_ip={self._egress_ip}, host_pod={self._host_tcpdump_pod_name}"
+        )
+
+    def get_template_args(self) -> dict[str, str | list[str] | bool]:
+        args = super().get_template_args()
+        args["command"] = json.dumps(["/usr/bin/container-entry-point.sh"])
+        args["args"] = json.dumps(["sleep", "infinity"])
+        return args
+
+    def initialize(self) -> None:
+        super().initialize()
+        self.render_pod_file("Host Tcpdump Pod Yaml for DPU Offload Verification")
+
+    def _get_default_interface(self) -> Optional[str]:
+        """Get the physical network interface on the host."""
+        # On host, look for the interface connected to the DPU
+        r = self.run_oc_exec(
+            "ovs-vsctl list-ports br-ex 2>/dev/null | grep -v ^patch | head -1",
+            may_fail=True,
+        )
+        if r.success and r.out.strip():
+            return r.out.strip().split()[0]
+
+        r = self.run_oc_exec("ip -j route get 1", may_fail=True)
+        if r.success and r.out.strip():
+            try:
+                routes = json.loads(r.out.strip())
+                if routes and "dev" in routes[0]:
+                    return typing.cast(str, routes[0]["dev"])
+            except (json.JSONDecodeError, KeyError, IndexError):
+                pass
+
+        return None
+
+    def _parse_tcpdump_output(self, output: str) -> set[str]:
+        """Parse tcpdump output to extract source IPs."""
+        source_ips: set[str] = set()
+        pattern = r"IP\s+(\d+\.\d+\.\d+\.\d+)\.\d+\s+>"
+
+        for line in output.splitlines():
+            match = re.search(pattern, line)
+            if match:
+                source_ips.add(match.group(1))
+
+        return source_ips
+
+    def _create_task_operation(self) -> TaskOperation:
+        def _thread_action() -> BaseOutput:
+            success_result = True
+            msg: Optional[str] = None
+            parsed_data: dict[str, typing.Any] = {}
+
+            self.ts.clmo_barrier.wait()
+
+            target_ip = self._perf_client.get_target_ip()
+            target_port = self._perf_client.get_target_port()
+
+            logger.info(
+                f"DPU offload verification: checking that SNAT to {self._egress_ip} "
+                f"does NOT happen on the host"
+            )
+
+            # Determine interface on host
+            if self._egress_interface == "auto":
+                ifname = self._get_default_interface()
+                if not ifname:
+                    ifname = "br-ex"
+            else:
+                ifname = self._egress_interface
+
+            parsed_data["interface"] = ifname
+            parsed_data["target_ip"] = target_ip
+            parsed_data["target_port"] = target_port
+
+            # Capture traffic on the HOST going to the external target
+            tcpdump_filter = f"tcp and dst host {target_ip} and dst port {target_port}"
+            tcpdump_cmd = (
+                f"timeout 30 tcpdump -i {ifname} -n -c 10 '{tcpdump_filter}' 2>&1"
+            )
+
+            logger.info(
+                f"Running HOST tcpdump for DPU offload verification: {tcpdump_cmd}"
+            )
+            r = self.run_oc_exec(tcpdump_cmd, may_fail=True)
+
+            parsed_data["tcpdump_output"] = r.out
+            parsed_data["tcpdump_success"] = r.success
+
+            self.ts.event_client_finished.wait()
+
+            if not r.success and "0 packets captured" not in r.out:
+                if r.returncode != 124:
+                    success_result = False
+                    msg = f"tcpdump on host failed: {r.err}"
+                    logger.error(msg)
+
+            source_ips = self._parse_tcpdump_output(r.out)
+            parsed_data["source_ips"] = list(source_ips)
+            parsed_data["egress_ip_should_not_appear"] = self._egress_ip
+
+            logger.info(f"Host tcpdump captured source IPs: {source_ips}")
+
+            # Verify that EgressIP is NOT seen on the host
+            # If SNAT is happening on the DPU, we should NOT see the EgressIP on the host
+            if self._egress_ip in source_ips:
+                success_result = False
+                msg = (
+                    f"DPU offload verification FAILED: EgressIP {self._egress_ip} "
+                    f"was seen on the HOST, indicating SNAT is happening on the host, "
+                    f"not on the DPU. This may indicate hardware offload is not working."
+                )
+                logger.error(msg)
+            elif not source_ips:
+                msg = (
+                    "DPU offload verification inconclusive: no traffic captured on host. "
+                    "This could indicate traffic is not flowing through the host."
+                )
+                logger.warning(msg)
+            else:
+                msg = (
+                    f"DPU offload verification PASSED: traffic on host uses "
+                    f"source IPs {source_ips}, not EgressIP {self._egress_ip}. "
+                    f"SNAT is happening on the DPU as expected."
+                )
+                logger.info(msg)
+
+            return PluginOutput(
+                success=success_result,
+                msg=msg,
+                plugin_metadata=self.get_plugin_metadata(),
+                command=tcpdump_cmd,
+                result=parsed_data,
+            )
+
+        return TaskOperation(
+            log_name=self.log_name,
+            thread_action=_thread_action,
+        )
+
+    def _aggregate_output_log_success(
+        self,
+        result: tftbase.AggregatableOutput,
+    ) -> None:
+        assert isinstance(result, PluginOutput)
+        logger.info(f"EgressIP DPU offload verification results: {result.result}")
