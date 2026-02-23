@@ -317,6 +317,7 @@ class TestCaseType(Enum):
     HOST_TO_NODE_PORT_TO_HOST_SAME_NODE = 23
     HOST_TO_NODE_PORT_TO_HOST_DIFF_NODE = 24
     POD_TO_EXTERNAL = 25
+    POD_TO_EXTERNAL_EGRESS = 26
     POD_TO_POD_2ND_INTERFACE_SAME_NODE = 27
     POD_TO_POD_2ND_INTERFACE_DIFF_NODE = 28
     POD_TO_POD_MULTI_NETWORK_POLICY = 29
@@ -928,6 +929,13 @@ _test_case_typ_infos = {
             is_same_node=False,
             is_server_hostbacked=False,
             is_client_hostbacked=True,
+        ),
+        TestCaseTypInfo(
+            test_case_type=TestCaseType.POD_TO_EXTERNAL_EGRESS,
+            connection_mode=ConnectionMode.EXTERNAL_IP,
+            is_same_node=False,
+            is_server_hostbacked=False,
+            is_client_hostbacked=False,
         ),
         TestCaseTypInfo(
             test_case_type=TestCaseType.POD_TO_POD_2ND_INTERFACE_SAME_NODE,
